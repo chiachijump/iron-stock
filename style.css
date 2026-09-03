@@ -231,6 +231,13 @@ main { padding: 12px 14px; }
   font-weight: bold;
 }
 .usage-total b { font-size: 19px; color: var(--accent); }
+.usage-length {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0 2px;
+  font-size: 18px;
+}
+.usage-length b { font-size: 19px; }
 
 /* Saved recipes */
 .saved-item {

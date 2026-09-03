@@ -66,7 +66,7 @@
     <p>單位支援 mm / cm / m，例如 2250、225cm、2.25m</p>
   </footer>
 
-  <script src="app.js?v=20260903b"></script>
+  <script src="app.js?v=20260903c"></script>
   <script>
     /*** 前端互動邏輯 ***/
 
@@ -164,8 +164,8 @@
       return row;
     }
 
-    // 預設常用規格（6000 / 9000 / 10000 / 12000）
-    const DEFAULT_STOCKS = [6000, 9000, 10000, 12000];
+    // 預設常用規格（6000 / 8000 / 9000 / 10000 / 12000）
+    const DEFAULT_STOCKS = [6000, 8000, 9000, 10000, 12000];
 
     document.getElementById('addStockBtn').onclick = () =>
       makeStockRow(stockList, { fixed: false });
@@ -292,7 +292,7 @@
       let groupNo = 1;
       for (const g of groupMap.values()) {
         html += `<div class="bar bar-new">
-          <div class="bar-head">第 ${groupNo} 組 ｜ ${g.n}根 × ${fmt(g.raw)}</div>
+          <div class="bar-head">第 ${groupNo} 組 ｜ ${g.n}支 × ${fmt(g.raw)}</div>
           <div class="bar-cut">${g.seg}</div>
           <div class="bar-leftover">每根餘料 ${g.leftover}mm</div>
         </div>`;
@@ -311,16 +311,14 @@
         rawUsageSorted.forEach(([raw, cnt]) => {
           html += `<div class="usage-row"><span>${fmt(raw)}</span><b>${cnt} 支</b></div>`;
         });
-        html += `<div class="usage-total"><span>總計</span><b>${result.totalRaw} 根</b></div>
+        html += `<div class="usage-total"><span>總計</span><b>${result.totalRaw} 支</b></div>
+        <div class="usage-length"><span>使用長度</span><b>${(result.plan.reduce((s, p) => s + p.raw, 0)) / 1000}m</b></div>
         </div>`;
       }
 
       // 彙總
       const totalUniquePat = result.totalUniquePat !== undefined ? result.totalUniquePat : groupMap.size;
-      const usedLenM = (result.plan.reduce((s, p) => s + p.raw, 0)) / 1000;
       html += `<div class="summary">
-        <div class="summary-row"><span>使用原料</span><b>${result.totalRaw} 根</b></div>
-        <div class="summary-row"><span>使用長度</span><b>${usedLenM}m</b></div>
         <div class="summary-row"><span>切法設定</span><b>${totalUniquePat} 種</b></div>
         <div class="summary-row"><span>總刀數</span><b>${result.totalCuts} 刀</b></div>
         <div class="summary-row"><span>總餘料</span><b>${result.totalLeftover}mm</b></div>
@@ -359,7 +357,7 @@
         div.className = 'saved-item';
         const date = new Date(entry.time).toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
         const abs = entry.result
-          ? `｜${entry.result.totalRaw}根｜${entry.result.totalUniquePat != null ? entry.result.totalUniquePat + '種設定｜' : ''}${entry.result.totalCuts}刀｜剩${entry.result.totalLeftover}mm`
+          ? `｜${entry.result.totalRaw}支｜${entry.result.totalUniquePat != null ? entry.result.totalUniquePat + '種設定｜' : ''}${entry.result.totalCuts}刀｜剩${entry.result.totalLeftover}mm`
           : '';
         div.innerHTML = `<span class="saved-date">${date}</span><span class="saved-order">${orderTxt}${abs}</span>`;
         div.onclick = () => loadRecipe(entry);

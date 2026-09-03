@@ -131,9 +131,9 @@ function optimizeOrder(orders, stock) {
     if (!rem.some(d => d > 0)) {
       const patCount = countUniquePat(plan);
       if (usedLen < bestCost ||
-          (usedLen === bestCost && patCount < bestUniquePat) ||
-          (usedLen === bestCost && patCount === bestUniquePat && cuts < bestCuts) ||
-          (usedLen === bestCost && patCount === bestUniquePat && cuts === bestCuts && rawCount < bestRawCount)) {
+          (usedLen === bestCost && cuts < bestCuts) ||
+          (usedLen === bestCost && cuts === bestCuts && patCount < bestUniquePat) ||
+          (usedLen === bestCost && cuts === bestCuts && patCount === bestUniquePat && rawCount < bestRawCount)) {
         bestCost = usedLen; bestRawCount = rawCount; bestCuts = cuts; bestUniquePat = patCount;
         best = plan.map(p => ({ raw: raws[p.ri], counts: Object.assign({}, p.counts), used: p.used, kerf: p.kerf, leftover: raws[p.ri] - p.used - p.kerf }));
       }
@@ -217,11 +217,105 @@ function optimizeOrder(orders, stock) {
 
   if (!best) return null;
 
+  // 併組後處理: 同種料重新分配以減少切法組數 (不改變支數/總長度)
+  // 僅在「總組數確實更少」時才採用, 否則保留原方案
+  const origGroup = countUniquePat(best);
+  const regrouped = regroupPlan(best, lengths);
+  if (countUniquePat(regrouped) < origGroup) {
+    best = regrouped;
+  }
+
   const totalRaw = best.length;
   const totalCuts = best.reduce((s, p) => s + Object.values(p.counts).reduce((a, b) => a + b, 0), 0);
   const totalUniquePat = countUniquePat(best);
   const totalLeftover = best.reduce((s, p) => s + p.raw, 0) - totalCol;
   return { plan: best, lengths, totalRaw, totalLeftover, totalCuts, totalUniquePat };
+}
+
+/**
+ * 併組優化: 將同一種原料的所有支重新分配,
+ * 每輪針對「剩餘需求總長度最大的成品」選最合適 pattern 整支集滿,
+ * 傾向整支集滿單一/少數成品, 把難併的長料配對, 以減少切法組數。
+ * 支數與總長度只可能不增加若無法完整重排則保留原方案。
+ * @param {Array} plan   [{raw, counts, used, kerf, leftover}, ...]
+ * @param {Array} lengths 成品長度
+ * @returns 重新分配後的 plan
+ */
+function regroupPlan(plan, lengths) {
+  // 依原料分組
+  const rawGroups = new Map();
+  for (const p of plan) {
+    if (!rawGroups.has(p.raw)) rawGroups.set(p.raw, []);
+    rawGroups.get(p.raw).push(p);
+  }
+  const out = [];
+  for (const [raw, items] of rawGroups) {
+    const n = items.length;
+    if (n <= 1) { out.push(...items.map(p => Object.assign({}, p))); continue; }
+    // 該原料在此方案中要承擔的每種成品段數總量
+    const agg = {};
+    for (const p of items) for (const k in p.counts) agg[k] = (agg[k] || 0) + p.counts[k];
+    const keys = Object.keys(agg).map(Number);
+    // 產生該原料所有可行的切割方式 (受限於 agg)
+    const pats = [];
+    const cur = {};
+    (function gen(start, used) {
+      let has = false;
+      for (const k in cur) if (cur[k] > 0) { has = true; break; }
+      if (has && used > 0 && used <= raw) pats.push({ counts: Object.assign({}, cur), used });
+      for (let j = start; j < keys.length; j++) {
+        const k = keys[j];
+        if (lengths[k] > raw) continue;
+        if (used + lengths[k] > raw) continue;
+        if ((cur[k] || 0) >= agg[k]) continue;
+        cur[k] = (cur[k] || 0) + 1;
+        gen(j, used + lengths[k]);
+        cur[k]--;
+        if (cur[k] === 0) delete cur[k];
+      }
+    })(0, 0);
+    // 每輪先針對「剩餘需求總長度最大」的成品種類,
+    // 選能「整除清除該種類」且利用率最高的切割方式, 塞滿該 pattern。
+    // 如此傾向「整支集滿單一成品」, 並把難以併組的長料配對起來, 減少組數。
+    pats.sort((a, b) => (b.used - a.used) || (Object.keys(a.counts).length - Object.keys(b.counts).length));
+    const rem = Object.assign({}, agg);
+    const rebuilt = [];
+    let guard = 0;
+    while (Object.values(rem).some(v => v > 0) && guard++ < 1000) {
+      // 找出剩餘需求總長度最大的成品種類
+      let maxKey = -1, maxLen = -1;
+      for (const k of keys) {
+        if (rem[k] > 0 && lengths[k] * rem[k] > maxLen) { maxLen = lengths[k] * rem[k]; maxKey = k; }
+      }
+      let best = null;
+      for (const pat of pats) {
+        if (!(pat.counts[maxKey] > 0)) continue; // 必須能涵蓋目標種類
+        let maxT = Infinity, ok = true;
+        for (const k in pat.counts) {
+          if (rem[k] <= 0) { ok = false; break; }
+          maxT = Math.min(maxT, Math.floor(rem[k] / pat.counts[k]));
+        }
+        if (!ok || maxT <= 0) continue;
+        const remainAfter = rem[maxKey] % pat.counts[maxKey]; // 0 = 可整除清除
+        if (!best || remainAfter < best.remainAfter || (remainAfter === best.remainAfter && pat.used > best.pat.used)) {
+          best = { pat, maxT, remainAfter };
+        }
+      }
+      if (!best) break; // 無法繼續, 放棄重排
+      const t = best.maxT;
+      for (let i = 0; i < t; i++) {
+        rebuilt.push({ raw, counts: Object.assign({}, best.pat.counts), used: best.pat.used, kerf: 0, leftover: raw - best.pat.used });
+        for (const k in best.pat.counts) rem[k] -= best.pat.counts[k];
+      }
+    }
+    // 需完整覆蓋; 若重建支數超過原方案支數(更耗料)則不採用該原料的重排
+    if (Object.values(rem).some(v => v > 0) || rebuilt.length > n) {
+      out.push(...items.map(p => Object.assign({}, p)));
+      continue;
+    }
+    out.push(...rebuilt);
+  }
+  return out;
 }
 
 /* 若在瀏覽器環境提供 window 供引用; 供 Node 測試時匯出 */
