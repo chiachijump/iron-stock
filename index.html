@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#1a1a1a">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>鐵材配料</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>🔧 鐵材配料</h1>
+    <p class="subtitle">混切裁切計算</p>
+  </header>
+
+  <main>
+    <!-- 庫存長度輸入 -->
+    <section class="card" id="stockSection">
+      <div class="card-head">
+        <h2>庫存長度</h2>
+        <button class="icon-btn" id="addStockBtn" aria-label="新增庫存">＋</button>
+      </div>
+      <p class="hint">勾選要使用的規格，輸入數量。可直接用下方常用規格，或用「＋」自行輸入餘料。</p>
+      <div id="stockList"></div>
+      <div class="stock-total" id="stockTotal"></div>
+    </section>
+
+    <!-- 訂單輸入 -->
+    <section class="card" id="orderSection">
+      <div class="card-head">
+        <h2>訂單需求</h2>
+        <button class="icon-btn" id="addOrderBtn" aria-label="新增訂單">＋</button>
+      </div>
+      <p class="hint">輸入要裁切的成品「長度 數量」。</p>
+      <div id="orderList"></div>
+    </section>
+
+    <!-- 計算按鈕 -->
+    <button class="calc-btn" id="calcBtn">計算配料</button>
+
+    <!-- 錯誤提示 -->
+    <p class="error" id="errorMsg"></p>
+
+    <!-- 結果 -->
+    <section class="card" id="resultSection" hidden>
+      <div class="card-head">
+        <h2>📋 裁切方案</h2>
+      </div>
+      <div id="resultBody"></div>
+    </section>
+
+    <!-- 常用配方 -->
+    <section class="card" id="savedSection" hidden>
+      <div class="card-head">
+        <h2>💾 常用配方</h2>
+      </div>
+      <div id="savedList"></div>
+    </section>
+  </main>
+
+  <footer>
+    <p>單位支援 mm / cm / m，例如 2250、225cm、2.25m</p>
+  </footer>
+
+  <script src="app.js?v=20260903b"></script>
+  <script>
+    /*** 前端互動邏輯 ***/
+
+    // 動態列管理
+    function makeInputRow(container, opts) {
+      const row = document.createElement('div');
+      row.className = 'input-row';
+
+      const len = document.createElement('input');
+      len.type = 'text';
+      len.inputmode = 'decimal';
+      len.placeholder = opts.lenPh || '長度 (mm)';
+      len.value = opts.lenVal || '';
+
+      const qty = document.createElement('input');
+      qty.type = 'number';
+      qty.inputmode = 'numeric';
+      qty.placeholder = '數量';
+      qty.value = opts.qtyVal || '1';
+      qty.min = '1';
+
+      const del = document.createElement('button');
+      del.className = 'icon-btn del';
+      del.textContent = '✕';
+      del.setAttribute('aria-label', '刪除');
+      del.onclick = () => row.remove();
+
+      row.appendChild(len);
+      row.appendChild(qty);
+      row.appendChild(del);
+      container.appendChild(row);
+      return row;
+    }
+
+    const stockList = document.getElementById('stockList');
+    const orderList = document.getElementById('orderList');
+    const stockTotalEl = document.getElementById('stockTotal');
+
+    /* ---------- 庫存列管理（勾選框 + 長度 + 數量） ---------- */
+    // 建立一條庫存列
+    // opts: { label 固定長度標籤文字 | lenVal 自訂長度輸入值, checked 是否勾選, fixed 是否為固定規格(不可改長度) }
+    function makeStockRow(container, opts) {
+      const row = document.createElement('div');
+      row.className = 'stock-row';
+
+      const check = document.createElement('input');
+      check.type = 'checkbox';
+      check.className = 'stock-check';
+      check.checked = (opts.checked === undefined) ? true : !!opts.checked;
+      check.addEventListener('input', updateStockTotal);
+
+      let lenField;
+      if (opts.fixed) {
+        const label = document.createElement('span');
+        label.className = 'stock-label';
+        label.textContent = opts.label;
+        lenField = { value: String(parseLength(opts.label)), _set: () => {} };
+        row.appendChild(check);
+        row.appendChild(label);
+      } else {
+        lenField = document.createElement('input');
+        lenField.type = 'text';
+        lenField.className = 'stock-len';
+        lenField.inputmode = 'decimal';
+        lenField.placeholder = '餘料長度';
+        lenField.value = opts.lenVal || '';
+        lenField.addEventListener('input', updateStockTotal);
+        row.appendChild(check);
+        row.appendChild(lenField);
+      }
+
+      const qty = document.createElement('input');
+      qty.type = 'number';
+      qty.className = 'stock-qty';
+      qty.inputmode = 'numeric';
+      qty.placeholder = '數量';
+      qty.value = opts.qtyVal !== undefined ? opts.qtyVal : '';
+      qty.min = '1';
+      qty.addEventListener('input', updateStockTotal);
+
+      const del = document.createElement('button');
+      del.className = 'icon-btn del stock-del';
+      del.textContent = '✕';
+      del.setAttribute('aria-label', '刪除');
+      del.onclick = () => { row.remove(); updateStockTotal(); };
+
+      row.appendChild(qty);
+      row.appendChild(del);
+      container.appendChild(row);
+
+      // 供 collectStock 使用
+      row._check = check;
+      row._len = opts.fixed ? parseLength(opts.label) : lenField;
+      row._qty = qty;
+      return row;
+    }
+
+    // 預設常用規格（6000 / 9000 / 10000 / 12000）
+    const DEFAULT_STOCKS = [6000, 9000, 10000, 12000];
+
+    document.getElementById('addStockBtn').onclick = () =>
+      makeStockRow(stockList, { fixed: false });
+    document.getElementById('addOrderBtn').onclick = () =>
+      makeInputRow(orderList, { lenPh: '成品長度 (mm)' });
+
+    // 預設庫存: 固定 4 規格全部勾選
+    DEFAULT_STOCKS.forEach(l => makeStockRow(stockList, { fixed: true, label: fmt(l) }));
+    // 訂單預設一列
+    makeInputRow(orderList, { lenPh: '成品長度 (mm)' });
+
+    // 收集輸入
+    function collectRows(container) {
+      const rows = [];
+      container.querySelectorAll('.input-row').forEach(r => {
+        const lenInput = r.querySelector('input[type=text]');
+        const qtyInput = r.querySelector('input[type=number]');
+        const lenStr = lenInput.value.trim();
+        const qtyStr = qtyInput.value.trim();
+        if (!lenStr) return;
+        const len = parseLength(lenStr);
+        const qty = parseInt(qtyStr, 10);
+        if (isNaN(len) || isNaN(qty) || qty < 1 || len < 1) return;
+        rows.push([len, qty]);
+      });
+      return rows;
+    }
+
+    // 收集所有庫存列的原始資料（含勾選狀態），供計算與存檔用
+    function collectStockRows() {
+      const rows = [];
+      stockList.querySelectorAll('.stock-row').forEach(r => {
+        let len;
+        if (typeof r._len === 'number') {
+          len = r._len;
+        } else {
+          len = parseLength(r._len.value.trim());
+        }
+        const qty = parseInt(r._qty.value.trim(), 10);
+        rows.push({
+          len,
+          qty: isNaN(qty) ? 0 : qty,
+          checked: r._check.checked,
+          fixed: typeof r._len === 'number'
+        });
+      });
+      return rows;
+    }
+
+    // 收集庫存: 只取有勾選且數量 ≥ 1, 同長度累加
+    function collectStock() {
+      const map = new Map();
+      collectStockRows().forEach(r => {
+        if (!r.checked || r.qty < 1 || isNaN(r.len) || r.len < 1) return;
+        map.set(r.len, (map.get(r.len) || 0) + r.qty);
+      });
+      return Array.from(map, ([len, qty]) => [len, qty]);
+    }
+
+    // 計算並顯示「已選庫存總長度」(m)
+    function updateStockTotal() {
+      let total = 0;
+      collectStockRows().forEach(r => {
+        if (!r.checked || r.qty < 1 || isNaN(r.len)) return;
+        total += r.len * r.qty;
+      });
+      stockTotalEl.textContent = total > 0
+        ? `已選庫存總長度：${(total / 1000)}m`
+        : '';
+    }
+
+    function fmt(mm) {
+      return mm < 1000 ? mm + 'mm' : (mm / 1000) + 'm';
+    }
+
+    // 計算
+    document.getElementById('calcBtn').onclick = () => {
+      document.getElementById('errorMsg').textContent = '';
+      const orders = collectRows(orderList);
+      const stock = collectStock();
+
+      if (orders.length === 0) {
+        document.getElementById('errorMsg').textContent = '請至少輸入一項訂單需求。';
+        return;
+      }
+      if (stock.length === 0) {
+        document.getElementById('errorMsg').textContent = '請至少輸入一項庫存長度。';
+        return;
+      }
+
+      const result = optimizeOrder(orders, stock);
+      const resultSection = document.getElementById('resultSection');
+      const resultBody = document.getElementById('resultBody');
+
+      if (!result) {
+        resultBody.innerHTML = '<p class="error">無法以現有庫存完成訂單，請檢查庫存長度或數量是否足夠。</p>';
+      } else {
+        renderResult(result, orders, stock);
+      }
+      resultSection.hidden = false;
+
+      // 儲存配方到 local storage
+      saveRecipe(orders, stock, result);
+      renderSavedList();
+    };
+
+    function renderResult(result, orders, stock) {
+      const body = document.getElementById('resultBody');
+      let html = '';
+
+      // 依「切法」分組: key = 料長 + 排序後的成品組合
+      const groupMap = new Map();
+      result.plan.forEach(p => {
+        const seg = Object.keys(p.counts)
+          .sort((a, b) => a - b)
+          .map(k => p.counts[k] + '支' + result.lengths[k] + 'mm')
+          .join(' + ');
+        const key = p.raw + '|' + seg;
+        if (!groupMap.has(key)) groupMap.set(key, { raw: p.raw, seg, leftover: p.leftover, n: 0 });
+        const g = groupMap.get(key);
+        g.n++;
+      });
+
+      let groupNo = 1;
+      for (const g of groupMap.values()) {
+        html += `<div class="bar bar-new">
+          <div class="bar-head">第 ${groupNo} 組 ｜ ${g.n}根 × ${fmt(g.raw)}</div>
+          <div class="bar-cut">${g.seg}</div>
+          <div class="bar-leftover">每根餘料 ${g.leftover}mm</div>
+        </div>`;
+        groupNo++;
+      }
+
+      // 原料用量統計: 依規格統計各用掉幾支
+      const rawUsage = new Map(); // raw -> count
+      result.plan.forEach(p => {
+        rawUsage.set(p.raw, (rawUsage.get(p.raw) || 0) + 1);
+      });
+      const rawUsageSorted = Array.from(rawUsage.entries()).sort((a, b) => a[0] - b[0]);
+      if (rawUsageSorted.length) {
+        html += `<div class="usage-stats">
+          <div class="usage-title">📦 原料用量統計</div>`;
+        rawUsageSorted.forEach(([raw, cnt]) => {
+          html += `<div class="usage-row"><span>${fmt(raw)}</span><b>${cnt} 支</b></div>`;
+        });
+        html += `<div class="usage-total"><span>總計</span><b>${result.totalRaw} 根</b></div>
+        </div>`;
+      }
+
+      // 彙總
+      const totalUniquePat = result.totalUniquePat !== undefined ? result.totalUniquePat : groupMap.size;
+      const usedLenM = (result.plan.reduce((s, p) => s + p.raw, 0)) / 1000;
+      html += `<div class="summary">
+        <div class="summary-row"><span>使用原料</span><b>${result.totalRaw} 根</b></div>
+        <div class="summary-row"><span>使用長度</span><b>${usedLenM}m</b></div>
+        <div class="summary-row"><span>切法設定</span><b>${totalUniquePat} 種</b></div>
+        <div class="summary-row"><span>總刀數</span><b>${result.totalCuts} 刀</b></div>
+        <div class="summary-row"><span>總餘料</span><b>${result.totalLeftover}mm</b></div>
+      </div>`;
+
+      body.innerHTML = html;
+    }
+
+    /*** 常用配方 (localStorage) ***/
+    const STORE_KEY = 'iron-stock-recipes';
+    function saveRecipe(orders, stock, result) {
+      let list = [];
+      try { list = JSON.parse(localStorage.getItem(STORE_KEY)) || []; } catch (e) { list = []; }
+      const entry = {
+        time: Date.now(),
+        orders,
+        stock,
+        result: result ? { totalRaw: result.totalRaw, totalCuts: result.totalCuts, totalLeftover: result.totalLeftover, totalUniquePat: result.totalUniquePat !== undefined ? result.totalUniquePat : result.plan.reduce((set, p) => { const seg = Object.keys(p.counts).sort((a,b)=>a-b).map(k=>k+':'+p.counts[k]).join(','); return set.add(p.raw+'|'+seg); }, new Set()).size } : null,
+      };
+      list.unshift(entry);
+      if (list.length > 10) list = list.slice(0, 10);
+      try { localStorage.setItem(STORE_KEY, JSON.stringify(list)); } catch (e) {}
+    }
+
+    function renderSavedList() {
+      let list = [];
+      try { list = JSON.parse(localStorage.getItem(STORE_KEY)) || []; } catch (e) { list = []; }
+      const section = document.getElementById('savedSection');
+      const box = document.getElementById('savedList');
+      if (list.length === 0) { section.hidden = true; return; }
+      section.hidden = false;
+      box.innerHTML = '';
+      list.forEach((entry, idx) => {
+        const orderTxt = entry.orders.map(o => o[0] + 'mm×' + o[1]).join(', ');
+        const div = document.createElement('div');
+        div.className = 'saved-item';
+        const date = new Date(entry.time).toLocaleString('zh-TW', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        const abs = entry.result
+          ? `｜${entry.result.totalRaw}根｜${entry.result.totalUniquePat != null ? entry.result.totalUniquePat + '種設定｜' : ''}${entry.result.totalCuts}刀｜剩${entry.result.totalLeftover}mm`
+          : '';
+        div.innerHTML = `<span class="saved-date">${date}</span><span class="saved-order">${orderTxt}${abs}</span>`;
+        div.onclick = () => loadRecipe(entry);
+        box.appendChild(div);
+      });
+    }
+
+    function loadRecipe(entry) {
+      // 載入訂單與庫存到輸入區
+      orderList.innerHTML = '';
+      stockList.innerHTML = '';
+      if (entry.orders && entry.orders.length) {
+        entry.orders.forEach(o => makeInputRow(orderList, { lenVal: o[0], qtyVal: o[1] }));
+      } else {
+        makeInputRow(orderList, { lenPh: '成品長度 (mm)' });
+      }
+      // 相容舊資料 (之前存 scraps)
+      const savedStock = entry.stock || entry.scraps || [];
+      // 預設建固定規格（全勾選）
+      DEFAULT_STOCKS.forEach(l => makeStockRow(stockList, { fixed: true, label: fmt(l), qtyVal: '' }));
+      // 依儲存資料填入數量 / 勾選, 非固定長度另建自訂列
+      const rawToLen = {}; // mm -> 列
+      stockList.querySelectorAll('.stock-row').forEach(r => {
+        if (typeof r._len === 'number') rawToLen[r._len] = r;
+      });
+      savedStock.forEach(([l, q]) => {
+        const row = rawToLen[l];
+        if (row) {
+          row._check.checked = true;
+          row._qty.value = q;
+        } else {
+          makeStockRow(stockList, { fixed: false, lenVal: l, qtyVal: q, checked: true });
+        }
+      });
+      updateStockTotal();
+    }
+
+    // 初始載入顯示常用配方
+    renderSavedList();
+
+    /*** Service Worker 註冊 (PWA 離線) ***/
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js').catch(e => console.warn('SW 註冊失敗', e));
+      });
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,253 @@
+/* ===== 深色大型字 手機優先 ===== */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #1a1a1a;
+  --card: #242424;
+  --card-2: #2e2e2e;
+  --border: #3a3a3a;
+  --text: #f0f0f0;
+  --text-dim: #a8a8a8;
+  --accent: #4d9de0;
+  --accent-press: #3b86c4;
+  --new: #4d9de0;
+  --danger: #e06060;
+  --ok: #6fc06f;
+}
+
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC", "Heiti TC", "Microsoft JhengHei", sans-serif;
+  line-height: 1.5;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  max-width: 480px;
+  margin: 0 auto;
+  padding-bottom: 40px;
+  font-size: 18px;
+}
+
+/* Header */
+header {
+  text-align: center;
+  padding: 22px 16px 12px;
+  background: linear-gradient(180deg, #222, var(--bg));
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+header h1 { font-size: 30px; letter-spacing: 2px; }
+header .subtitle { color: var(--text-dim); font-size: 15px; margin-top: 2px; }
+
+main { padding: 12px 14px; }
+
+/* Cards */
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px 14px;
+  margin-bottom: 16px;
+}
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.card-head h2 { font-size: 21px; }
+.optional {
+  font-size: 13px;
+  color: var(--text-dim);
+  background: var(--card-2);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+.hint { color: var(--text-dim); font-size: 14px; margin-bottom: 10px; }
+
+/* Input rows */
+.input-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+  align-items: center;
+}
+.input-row input {
+  flex: 1;
+  background: var(--card-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 14px 12px;
+  font-size: 18px;
+  min-width: 0;
+}
+.input-row input:nth-child(2) { flex: 0 0 84px; text-align: center; }
+.input-row input:focus { outline: 2px solid var(--accent); border-color: var(--accent); }
+.input-row input::placeholder { color: #666; }
+
+/* Stock rows (庫存: 勾選框 + 長度 + 數量) */
+.stock-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+  align-items: center;
+}
+.stock-check {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.stock-label {
+  flex: 1;
+  font-size: 18px;
+  color: var(--text);
+  padding-left: 2px;
+}
+.stock-len {
+  flex: 1;
+  background: var(--card-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 14px 12px;
+  font-size: 18px;
+  min-width: 0;
+}
+.stock-len:focus { outline: 2px solid var(--accent); border-color: var(--accent); }
+.stock-len::placeholder { color: #666; }
+.stock-qty {
+  flex: 0 0 84px;
+  background: var(--card-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 14px 12px;
+  font-size: 18px;
+  text-align: center;
+  min-width: 0;
+}
+.stock-qty:focus { outline: 2px solid var(--accent); border-color: var(--accent); }
+.stock-qty::placeholder { color: #666; }
+.stock-del { width: 46px; height: 46px; }
+.stock-total {
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+  color: var(--text);
+  font-size: 17px;
+  font-weight: bold;
+}
+
+/* Buttons */
+.icon-btn {
+  flex: 0 0 auto;
+  width: 46px;
+  height: 46px;
+  border-radius: 10px;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.icon-btn:active { background: var(--accent-press); }
+.icon-btn.del { background: #4a3a3a; color: var(--danger); font-size: 18px; }
+
+.calc-btn {
+  width: 100%;
+  padding: 18px;
+  font-size: 22px;
+  font-weight: bold;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 14px;
+  cursor: pointer;
+  letter-spacing: 2px;
+  margin-bottom: 16px;
+}
+.calc-btn:active { background: var(--accent-press); }
+
+/* Error */
+.error { color: var(--danger); font-size: 16px; margin-bottom: 12px; text-align: center; }
+
+/* Result */
+.bar {
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+.bar-new { background: var(--card-2); border-left: 5px solid var(--new); }
+.bar-head { font-size: 18px; font-weight: bold; margin-bottom: 4px; }
+.bar-cut { font-size: 18px; margin-bottom: 2px; }
+.bar-leftover { font-size: 15px; color: var(--text-dim); }
+
+/* Summary */
+.summary {
+  margin-top: 4px;
+  border-top: 1px dashed var(--border);
+  padding-top: 10px;
+}
+.summary-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
+  font-size: 18px;
+}
+.summary-row b { font-size: 19px; }
+
+/* Usage stats (原料用量統計) */
+.usage-stats {
+  margin: 4px 0 12px;
+  border-top: 1px dashed var(--border);
+  border-bottom: 1px dashed var(--border);
+  padding: 8px 0;
+}
+.usage-title { font-size: 18px; font-weight: bold; padding: 4px 0; }
+.usage-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  font-size: 18px;
+}
+.usage-row b { font-size: 19px; }
+.usage-total {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0 2px;
+  font-size: 18px;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+  font-weight: bold;
+}
+.usage-total b { font-size: 19px; color: var(--accent); }
+
+/* Saved recipes */
+.saved-item {
+  background: var(--card-2);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 8px;
+  cursor: pointer;
+}
+.saved-item:active { background: var(--border); }
+.saved-date { display: block; font-size: 13px; color: var(--text-dim); margin-bottom: 2px; }
+.saved-order { font-size: 16px; }
+
+/* Footer */
+footer {
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 14px;
+  padding: 12px;
+}
