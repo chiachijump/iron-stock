@@ -66,7 +66,7 @@
     <p>單位支援 mm / cm / m，例如 2250、225cm、2.25m</p>
   </footer>
 
-  <script src="app.js?v=20260903c"></script>
+  <script src="app.js?v=20261002a"></script>
   <script>
     /*** 前端互動邏輯 ***/
 
@@ -85,7 +85,7 @@
       qty.type = 'number';
       qty.inputmode = 'numeric';
       qty.placeholder = '數量';
-      qty.value = opts.qtyVal || '1';
+      qty.value = (opts.qtyVal !== undefined) ? opts.qtyVal : ''; // 預設空白, 由使用者自行填
       qty.min = '1';
 
       const del = document.createElement('button');
@@ -243,16 +243,28 @@
 
     // 計算
     document.getElementById('calcBtn').onclick = () => {
-      document.getElementById('errorMsg').textContent = '';
+      const errEl = document.getElementById('errorMsg');
+      errEl.textContent = '';
+
+      // 檢查「有填長度但沒填數量」的列 (數量預設為空白)
+      let blankQty = 0;
+      orderList.querySelectorAll('.input-row').forEach(r => {
+        const l = r.querySelector('input[type=text]').value.trim();
+        const q = r.querySelector('input[type=number]').value.trim();
+        if (l && !q) blankQty++;
+      });
+
       const orders = collectRows(orderList);
       const stock = collectStock();
 
       if (orders.length === 0) {
-        document.getElementById('errorMsg').textContent = '請至少輸入一項訂單需求。';
+        errEl.textContent = blankQty > 0
+          ? '請在訂單需求填入「長度」與「數量」。'
+          : '請至少輸入一項訂單需求。';
         return;
       }
       if (stock.length === 0) {
-        document.getElementById('errorMsg').textContent = '請至少輸入一項庫存長度。';
+        errEl.textContent = '請至少輸入一項庫存長度。';
         return;
       }
 
@@ -266,6 +278,10 @@
         renderResult(result, orders, stock);
       }
       resultSection.hidden = false;
+
+      if (blankQty > 0) {
+        errEl.textContent = `有 ${blankQty} 筆訂單只填了長度沒填數量，已略過未計算。`;
+      }
 
       // 儲存配方到 local storage
       saveRecipe(orders, stock, result);
@@ -284,17 +300,18 @@
           .map(k => p.counts[k] + '支' + result.lengths[k] + 'mm')
           .join(' + ');
         const key = p.raw + '|' + seg;
-        if (!groupMap.has(key)) groupMap.set(key, { raw: p.raw, seg, leftover: p.leftover, n: 0 });
+        if (!groupMap.has(key)) groupMap.set(key, { raw: p.raw, seg, leftover: p.leftover, n: 0, pieces: p.pieces, kerf: p.kerf || 0 });
         const g = groupMap.get(key);
         g.n++;
       });
 
       let groupNo = 1;
       for (const g of groupMap.values()) {
+        const segInfo = `每支 ${g.pieces} 段` + (g.kerf > 0 ? `（切痕 ${g.kerf}mm）` : '');
         html += `<div class="bar bar-new">
           <div class="bar-head">第 ${groupNo} 組 ｜ ${g.n}支 × ${fmt(g.raw)}</div>
           <div class="bar-cut">${g.seg}</div>
-          <div class="bar-leftover">每根餘料 ${g.leftover}mm</div>
+          <div class="bar-leftover">${segInfo} ｜ 餘料 ${g.leftover}mm</div>
         </div>`;
         groupNo++;
       }
@@ -321,6 +338,7 @@
       html += `<div class="summary">
         <div class="summary-row"><span>切法設定</span><b>${totalUniquePat} 種</b></div>
         <div class="summary-row"><span>總刀數</span><b>${result.totalCuts} 刀</b></div>
+        <div class="summary-row"><span>切痕損耗</span><b>${result.totalKerf || 0}mm</b></div>
         <div class="summary-row"><span>總餘料</span><b>${result.totalLeftover}mm</b></div>
       </div>`;
 

@@ -1,9 +1,23 @@
 /* ============================================================
  * 鐵材裁切配料優化程式 (PWA 手機版)
  * 演算法: 混切優化 (分支限界 + 回溯 全域搜尋)
- * 目標優先順序: 總長度 → 切法設定數 → 刀數 → 根數
+ * 目標優先順序: 使用總長度 → 刀數 → 切法設定數(組數) → 根數
  * 庫存長度完全由使用者自行輸入 (無內建)
  * ============================================================ */
+
+/* ---------- 切痕 (鋸縫) 設定 ----------
+ * 每切一刀損耗 KERF_MM mm。
+ * 實務上「低於 6 段 (≤5 刀)」的支料不計切痕 (短切時實料長度通常還有餘裕),
+ * 達 6 段以上才把切痕算進去, 避免切滿的支料被算成不足長度。
+ * 切 n 段需 n-1 刀, 故切痕 = (段數 - 1) × KERF_MM
+ */
+const KERF_MM = 20;
+const KERF_MIN_SEG = 6;          // 達此段數才計切痕
+const TIME_LIMIT_MS = 3000;      // 搜尋時間預算 (手機保護)
+
+function kerfOf(pieces) {
+  return pieces >= KERF_MIN_SEG ? (pieces - 1) * KERF_MM : 0;
+}
 
 /* 解析長度字串: 支援 "2250"(mm), "225cm", "2.25m" */
 function parseLength(str) {
@@ -36,7 +50,6 @@ function parseLength(str) {
  *   }
  */
 function optimizeOrder(orders, stock) {
-  const KERF = 0; // 鋸縫 (mm) - 目前停用, 不算刀痕
   // 成品排序由大到小
   const pieceTypes = orders.map(o => [o[0], o[1]]).sort((a, b) => b[0] - a[0]);
   const lengths = pieceTypes.map(p => p[0]);
@@ -74,12 +87,12 @@ function optimizeOrder(orders, stock) {
     (function recp(start, used, pieces) {
       let has = false;
       for (const k in counts) { if (counts[k] > 0) { has = true; break; } }
-      if (has && used > 0 && used + pieces * KERF <= raw) {
-        pats.push({ counts: Object.assign({}, counts), used, pieces, kerf: pieces * KERF });
+      if (has && used > 0 && used + kerfOf(pieces) <= raw) {
+        pats.push({ counts: Object.assign({}, counts), used, pieces, kerf: kerfOf(pieces) });
       }
       for (let j = start; j < N; j++) {
         if (lengths[j] > raw) continue;
-        if (used + lengths[j] + (pieces + 1) * KERF > raw) continue;
+        if (used + lengths[j] + kerfOf(pieces + 1) > raw) continue;
         counts[j] = (counts[j] || 0) + 1;
         recp(j, used + lengths[j], pieces + 1);
         counts[j]--;
@@ -122,11 +135,39 @@ function optimizeOrder(orders, stock) {
     return s;
   }
 
+  // 每種原料一支最多能產出的產品長度 (用於估算剩餘所需原料長度的下界)
+  const cap = rawPatterns.map(pats => pats.reduce((m, p) => Math.max(m, p.used), 0));
+  // 依「每 mm 原料能產出的產品長度」由高到低, 供下界以最省的組合估算
+  const utilOrder = rawItems.map((r, ri) => ri).sort((a, b) => cap[b] / raws[b] - cap[a] / raws[a]);
+
+  // 剩餘需求至少需要多少原料長度 (放鬆估計的下界, 用於剪枝)
+  function lowerBound(left) {
+    let need = needLen(left);
+    if (need <= 0) return 0;
+    let lb = 0;
+    for (const ri of utilOrder) {
+      if (stockLeft[ri] <= 0) continue;
+      const canUse = cap[ri] * stockLeft[ri];
+      if (canUse >= need) { lb += need * raws[ri] / cap[ri]; need = 0; break; }
+      lb += raws[ri] * stockLeft[ri];
+      need -= canUse;
+    }
+    return need > 0 ? lb + need : lb; // 庫存不夠時退回需求長度當寬鬆值
+  }
+
   let nodes = 0;
-  const NODE_LIMIT = 6000000; // 節點保護上限 (較大以便深入找到最省總長)
+  const NODE_LIMIT = 6000000;      // 節點保護上限 (較大以便深入找到最省總長)
+  let deadline = Date.now() + TIME_LIMIT_MS; // 時間預算 (手機保護)
+  const MEMO_LIMIT = 1200000;      // 狀態記憶化上限 (控制記憶體用量)
+  let truncated = false;           // 是否因節點/時間上限提早結束
+  let exhaustive = false;          // 是否有某一輪完整搜尋完畢 (=> 結果保證最優)
+  let rawDesc = true;              // 原料嘗試順序: true = 長料優先
+  const memo = new Map();         // (剩餘需求|剩餘庫存) -> 最優的 (usedLen, cuts)
 
   function dfs(usedLen, rawCount, cuts) {
-    if (++nodes > NODE_LIMIT) return; // 超出保護上限即停止 (保留目前已找到的最佳)
+    if (truncated) return; // 已達節點/時間上限 → 立即中止, 避免回溯階段仍做白工
+    if (++nodes > NODE_LIMIT) { truncated = true; return; }
+    if ((nodes & 2047) === 0 && Date.now() > deadline) { truncated = true; return; }
 
     if (!rem.some(d => d > 0)) {
       const patCount = countUniquePat(plan);
@@ -135,20 +176,29 @@ function optimizeOrder(orders, stock) {
           (usedLen === bestCost && cuts === bestCuts && patCount < bestUniquePat) ||
           (usedLen === bestCost && cuts === bestCuts && patCount === bestUniquePat && rawCount < bestRawCount)) {
         bestCost = usedLen; bestRawCount = rawCount; bestCuts = cuts; bestUniquePat = patCount;
-        best = plan.map(p => ({ raw: raws[p.ri], counts: Object.assign({}, p.counts), used: p.used, kerf: p.kerf, leftover: raws[p.ri] - p.used - p.kerf }));
+        best = plan.map(p => ({ raw: raws[p.ri], counts: Object.assign({}, p.counts), used: p.used, kerf: p.kerf, pieces: p.pieces, leftover: raws[p.ri] - p.used - p.kerf }));
       }
       return;
     }
 
-    // 下界剪枝 (總長度)
+    // 下界剪枝 (先用便宜的需求長度, 再用較強的原料產出下界)
     if (usedLen + needLen(rem) > bestCost) return;
+    if (usedLen + lowerBound(rem) > bestCost) return;
+
+    // 狀態支配剪枝: 同一個 (剩餘需求, 剩餘庫存) 若曾以更省的 (已用長度, 刀數) 到達,
+    // 此次的後續選擇完全相同 → 必定更差, 直接剪掉
+    const mkey = rem.join(',') + '|' + stockLeft.join(',');
+    const prev = memo.get(mkey);
+    if (prev !== undefined && (prev[0] < usedLen || (prev[0] === usedLen && prev[1] < cuts))) return;
+    if (prev !== undefined || memo.size < MEMO_LIMIT) memo.set(mkey, [usedLen, cuts]);
 
     // 最長剩餘需求
     let longest = 0;
     for (let i = 0; i < N; i++) if (rem[i] > 0 && lengths[i] > longest) longest = lengths[i];
 
-    // 長料優先嘗試 (更容易先找到解, 改善剪枝效果)
-    for (let ri = M - 1; ri >= 0; ri--) {
+    // 依設定的原料順序嘗試 (長料優先或短料優先, 由外層多策略搜尋切換)
+    for (let k = 0; k < M; k++) {
+      const ri = rawDesc ? (M - 1 - k) : k;
       if (stockLeft[ri] <= 0) continue;
       if (raws[ri] < longest) continue;
       const raw = raws[ri];
@@ -160,9 +210,9 @@ function optimizeOrder(orders, stock) {
         for (let i = 0; i < N; i++) if ((pat.counts[i] || 0) > 0 && rem[i] > 0) hits = true;
         if (!hits) continue;
         stockLeft[ri]--;
-        plan.push({ ri, counts: pat.counts, used: pat.used, kerf: pat.kerf });
+        plan.push({ ri, counts: pat.counts, used: pat.used, kerf: pat.kerf, pieces: pat.pieces });
         for (let i = 0; i < N; i++) rem[i] -= (pat.counts[i] || 0);
-        dfs(usedLen + raw, rawCount + 1, cuts + Object.values(pat.counts).reduce((s, v) => s + v, 0));
+        dfs(usedLen + raw, rawCount + 1, cuts + pat.pieces);
         for (let i = 0; i < N; i++) rem[i] += (pat.counts[i] || 0);
         plan.pop();
         stockLeft[ri]++;
@@ -170,12 +220,11 @@ function optimizeOrder(orders, stock) {
     }
   }
 
-  // 先以貪婪求得一個良好上界
-  {
+  // 先以貪婪求得良好上界 (兩種策略各跑一次取較短者, 讓後續剪枝更有效)
+  function greedy(mode) {
     const rem0 = demand.slice();
     const st0 = stockLeft.slice();
     const plan0 = [];
-    let ok = true;
     while (rem0.some(d => d > 0)) {
       let chosen = null;
       for (let ri = 0; ri < M; ri++) {
@@ -189,31 +238,61 @@ function optimizeOrder(orders, stock) {
           for (let i = 0; i < N; i++) if ((pat.counts[i] || 0) > 0 && rem0[i] > 0) hits = true;
           if (!hits) continue;
           const eff = pat.used / raws[ri];
-          if (!cand || eff > cand.eff) cand = { pat, eff };
+          const score = mode === 0 ? eff : pat.used / 1000 + eff * 0.001;
+          if (!cand || score > cand.score) cand = { pat, eff, score };
         }
-        if (cand && (!chosen || cand.eff > chosen.eff)) chosen = { ri, ...cand };
+        if (cand && (!chosen || cand.score > chosen.score)) chosen = { ri, ...cand };
       }
-      if (!chosen) { ok = false; break; }
+      if (!chosen) return null;
       st0[chosen.ri]--;
-      plan0.push({ ri: chosen.ri, counts: Object.assign({}, chosen.pat.counts), used: chosen.pat.used, kerf: chosen.pat.kerf });
+      plan0.push({ ri: chosen.ri, counts: Object.assign({}, chosen.pat.counts), used: chosen.pat.used, kerf: chosen.pat.kerf, pieces: chosen.pat.pieces });
       for (const i in chosen.pat.counts) rem0[i] -= chosen.pat.counts[i];
     }
-    if (ok) {
-      const usedLen = plan0.reduce((s, p) => s + raws[p.ri], 0);
-      const cuts = plan0.reduce((s, p) => s + Object.values(p.counts).reduce((a, b) => a + b, 0), 0);
-      const patCount = countUniquePat(plan0);
-      bestCost = usedLen; bestRawCount = plan0.length; bestCuts = cuts; bestUniquePat = patCount;
-      best = plan0.map(p => ({ raw: raws[p.ri], counts: Object.assign({}, p.counts), used: p.used, kerf: p.kerf, leftover: raws[p.ri] - p.used - p.kerf }));
-      if (usedLen === totalCol) {
-        return { plan: best, lengths, totalRaw: bestRawCount, totalLeftover: 0, totalCuts: bestCuts, totalUniquePat: bestUniquePat };
-      }
-    } else {
-      // greedy 都無解 -> 可能真的無解
-      return null;
+    return plan0;
+  }
+
+  {
+    let plan0 = greedy(0);
+    const alt = greedy(1);
+    if (alt) {
+      const lenA = plan0 ? plan0.reduce((s, p) => s + raws[p.ri], 0) : Infinity;
+      const lenB = alt.reduce((s, p) => s + raws[p.ri], 0);
+      if (lenB < lenA) plan0 = alt;
+    }
+    if (!plan0) return null; // greedy 都無解 -> 可能真的無解
+
+    const usedLen = plan0.reduce((s, p) => s + raws[p.ri], 0);
+    const cuts = plan0.reduce((s, p) => s + p.pieces, 0);
+    const patCount = countUniquePat(plan0);
+    bestCost = usedLen; bestRawCount = plan0.length; bestCuts = cuts; bestUniquePat = patCount;
+    best = plan0.map(p => ({ raw: raws[p.ri], counts: Object.assign({}, p.counts), used: p.used, kerf: p.kerf, pieces: p.pieces, leftover: raws[p.ri] - p.used - p.kerf }));
+    if (usedLen === totalCol) {
+      return { plan: best, lengths, totalRaw: bestRawCount, totalLeftover: 0, totalCuts: bestCuts, totalUniquePat: bestUniquePat, totalKerf: best.reduce((s, p) => s + p.kerf, 0), optimal: true };
     }
   }
 
-  dfs(0, 0, 0);
+  // 多策略分時搜尋: 不同原料順序 / 切法排序各跑一段時間, 取各輪找到的最好結果
+  // (單一搜尋順序容易卡在壞的探索路徑上, 分時多策略可大幅提升找到好解的機率)
+  const PORTS = [
+    { rawDesc: true, patMode: 0 }, // 長料優先 + 高利用率
+    { rawDesc: false, patMode: 0 }, // 短料優先 + 高利用率
+    { rawDesc: true, patMode: 1 },  // 長料優先 + 切得滿
+    { rawDesc: false, patMode: 1 }, // 短料優先 + 切得滿
+  ];
+  const perSlice = Math.max(250, Math.floor(TIME_LIMIT_MS / PORTS.length));
+  for (const p of PORTS) {
+    rawDesc = p.rawDesc;
+    for (let ri = 0; ri < M; ri++) {
+      const pats = rawPatterns[ri];
+      if (p.patMode === 1) pats.sort((a, b) => (b.used - a.used) || ((b.used / raws[ri]) - (a.used / raws[ri])));
+      else pats.sort((a, b) => ((b.used / raws[ri]) - (a.used / raws[ri])));
+    }
+    deadline = Date.now() + perSlice;
+    truncated = false;
+    dfs(0, 0, 0);
+    if (!truncated) { exhaustive = true; break; } // 完整搜尋完畢 => 結果保證最優
+    if (bestCost === totalCol) break;             // 已達理論下限, 不可能更好
+  }
 
   if (!best) return null;
 
@@ -226,10 +305,12 @@ function optimizeOrder(orders, stock) {
   }
 
   const totalRaw = best.length;
-  const totalCuts = best.reduce((s, p) => s + Object.values(p.counts).reduce((a, b) => a + b, 0), 0);
+  const totalCuts = best.reduce((s, p) => s + p.pieces, 0);
   const totalUniquePat = countUniquePat(best);
-  const totalLeftover = best.reduce((s, p) => s + p.raw, 0) - totalCol;
-  return { plan: best, lengths, totalRaw, totalLeftover, totalCuts, totalUniquePat };
+  const totalKerf = best.reduce((s, p) => s + (p.kerf || 0), 0);
+  // 總餘料 = 實際還能用的長度 (已扣除切痕損耗)
+  const totalLeftover = best.reduce((s, p) => s + (p.raw - p.used - (p.kerf || 0)), 0);
+  return { plan: best, lengths, totalRaw, totalLeftover, totalCuts, totalUniquePat, totalKerf, optimal: exhaustive || bestCost === totalCol };
 }
 
 /**
@@ -256,24 +337,24 @@ function regroupPlan(plan, lengths) {
     const agg = {};
     for (const p of items) for (const k in p.counts) agg[k] = (agg[k] || 0) + p.counts[k];
     const keys = Object.keys(agg).map(Number);
-    // 產生該原料所有可行的切割方式 (受限於 agg)
+    // 產生該原料所有可行的切割方式 (受限於 agg, 切痕規則與主搜尋一致)
     const pats = [];
     const cur = {};
-    (function gen(start, used) {
+    (function gen(start, used, cnt) {
       let has = false;
       for (const k in cur) if (cur[k] > 0) { has = true; break; }
-      if (has && used > 0 && used <= raw) pats.push({ counts: Object.assign({}, cur), used });
+      if (has && used > 0 && used + kerfOf(cnt) <= raw) pats.push({ counts: Object.assign({}, cur), used, pieces: cnt, kerf: kerfOf(cnt) });
       for (let j = start; j < keys.length; j++) {
         const k = keys[j];
         if (lengths[k] > raw) continue;
-        if (used + lengths[k] > raw) continue;
+        if (used + lengths[k] + kerfOf(cnt + 1) > raw) continue;
         if ((cur[k] || 0) >= agg[k]) continue;
         cur[k] = (cur[k] || 0) + 1;
-        gen(j, used + lengths[k]);
+        gen(j, used + lengths[k], cnt + 1);
         cur[k]--;
         if (cur[k] === 0) delete cur[k];
       }
-    })(0, 0);
+    })(0, 0, 0);
     // 每輪先針對「剩餘需求總長度最大」的成品種類,
     // 選能「整除清除該種類」且利用率最高的切割方式, 塞滿該 pattern。
     // 如此傾向「整支集滿單一成品」, 並把難以併組的長料配對起來, 減少組數。
@@ -304,7 +385,7 @@ function regroupPlan(plan, lengths) {
       if (!best) break; // 無法繼續, 放棄重排
       const t = best.maxT;
       for (let i = 0; i < t; i++) {
-        rebuilt.push({ raw, counts: Object.assign({}, best.pat.counts), used: best.pat.used, kerf: 0, leftover: raw - best.pat.used });
+        rebuilt.push({ raw, counts: Object.assign({}, best.pat.counts), used: best.pat.used, pieces: best.pat.pieces, kerf: best.pat.kerf, leftover: raw - best.pat.used - best.pat.kerf });
         for (const k in best.pat.counts) rem[k] -= best.pat.counts[k];
       }
     }
@@ -320,5 +401,5 @@ function regroupPlan(plan, lengths) {
 
 /* 若在瀏覽器環境提供 window 供引用; 供 Node 測試時匯出 */
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { optimizeOrder, parseLength, RAW_MATERIALS: [] };
+  module.exports = { optimizeOrder, parseLength, kerfOf, KERF_MM, KERF_MIN_SEG, RAW_MATERIALS: [] };
 }
