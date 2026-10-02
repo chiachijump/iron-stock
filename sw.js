@@ -1,11 +1,12 @@
 /* 鐵材配料 - Service Worker (離線快取) */
-const CACHE = 'iron-stock-v6';
+const CACHE = 'iron-stock-v7';
 const ASSETS = [
   './',
   './index.html',
   './style.css',
   './app.js?v=20261002a',
   './manifest.webmanifest',
+  './robots.txt',
   './icons/icon-192.png',
   './icons/icon-512.png'
 ];
